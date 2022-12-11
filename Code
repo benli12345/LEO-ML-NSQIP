@@ -1,0 +1,393 @@
+#R version 4.2.1
+#Load NSQIP data (available with approval through ACS https://www.facs.org/quality-programs/data-and-registries/acs-nsqip/participant-use-data-file/)
+library(readr)
+data <- read_csv("data.csv")
+
+#Split data into train (70%) and test (30%) sets
+library(caTools)
+set.seed(123)
+sample <- sample.split(data$MALE, SplitRatio = 0.7)
+train <- subset(data, sample == TRUE)
+test <- subset(data, sample == FALSE)
+
+#Apply Random Over-Sample Examples (ROSE) for class balance on training set
+library(ROSE)
+train <- ROSE(MALE ~ ., data = train, N = 10000, seed = 123)$data
+
+#Define predictors
+library(dplyr)
+predictors_train <- train %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test <- test %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+#Train pre-op models
+library(caret)
+library(xgboost)
+library(ranger)
+library(naivebayes)
+library(e1071)
+library(nnet)
+train_control <- trainControl(method = "cv", number = 10) #10-fold cross-validation
+
+#Train XGBoost
+XGBgrid <- expand.grid(max_depth = c(2,3,4,5,6,7,8,9), nrounds = (1:10)*50, eta = c(0.4,0.3,0.2,0.1,0.05,0.01,0.001), gamma = c(0,0.1,1,1.5,2), subsample = c(0.5,0.6,0.7,0.8,0.9,1), min_child_weight = c(1,3,5,7,10), colsample_bytree = c(0.5,0.6,0.7,0.8,0.9,1) #XGBoost grid search for hyperparameters
+XGB <- train(x = as.matrix(predictors_train), y = train$MALE, data = train, method = "xgbTree", metric = "ROC", trControl = train_control, tuneGrid = XGBgrid)
+
+#Train random forest
+RFgrid <- expand.grid(mtry = 2:4, splitrule = "gini", min.node.size = c(10,20))
+RF <- train(x = predictors_train, y = train$MALE, data = train, method = "ranger", metric = "ROC", trControl = train_control, tuneGrid = RFgrid)
+
+#Train naive bayes
+NBgrid <- expand.grid(usekernel = c(TRUE, FALSE), fL = 0:5, adjust = seq(0,5,by=1))
+NB <- train(x = predictors_train, y = as.factor(train$MALE), data = train, method = "naive_bayes", metric = "ROC", trControl = train_control, tuneGrid = NBgrid)
+
+#Train support vector machine
+SVMgrid <- expand.grid(C = c(0.01, 0.1))
+SVM <- train(x = predictors_train, y = train$MALE, data = train, method = "svmRadial", metric = "ROC", trControl = train_control, tuneGrid = SVMgrid)
+
+#Train artificial neural network
+NNETgrid <- expand.grid(size = seq(1,10,by=1), decay = seq(0.1,0.5,by=0.1))
+NNET <- train(x = predictors_train, y = train$MALE, data = train, method = "nnet", metric = "ROC", trControl = train_control, tuneGrid = NNETgrid)
+
+#Train logistic regression
+LRgrid <- expand.grid(parameter = c(0.001, 0.001, 0.1, 1, 10, 100, 1000))
+LR <- train(x = predictors_train, y = train$MALE, data = train, method = "glm", metric = "ROC", trControl = train_control, tuneGrid = LRgrid)
+
+#Evaluate models on test set
+library(pROC)
+
+XGB_pred <- predict(XGB, as.matrix(predictors_test))
+auc(test$MALE, XGB_pred)
+ci.auc(test$MALE, XGB_pred)
+XGB_pred_0.5 <- ifelse(XGB_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(XGB_pred_0.5))
+
+RF_pred <- predict(RF, predictors_test)
+auc(test$MALE, RF_pred$predictions)
+ci.auc(test$MALE, RF_pred$predictions)
+RF_pred_0.5 <- ifelse(RF_pred$predictions > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(RF_pred_0.5))
+
+NB_pred <- predict(NB, predictors_test)
+auc(test$MALE, as.numeric(NB_pred))
+ci.auc(test$MALE, as.numeric(NB_pred))
+NB_pred_0.5 <- ifelse(as.numeric(NB_pred) > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(NB_pred_0.5))
+
+SVM_pred <- predict(SVM, predictors_test)
+auc(test$MALE, SVM_pred)
+ci.auc(test$MALE, SVM_pred)
+SVM_pred_0.5 <- ifelse(SVM_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(SVM_pred_0.5))
+
+NNET_pred <- predict(NNET, predictors_test)
+auc(test$MALE, NNET_pred)
+ci.auc(test$MALE, NNET_pred)
+NNET_pred_0.5 <- ifelse(NNET_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(NNET_pred_0.5))
+
+LR_pred <- predict(LR, predictors_test)
+auc(test$MALE, LR_pred)
+ci.auc(test$MALE, LR_pred)
+LR_pred_0.5 <- ifelse(LR_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MALE), as.factor(LR_pred_0.5))
+
+#XGBoost selected as best performing model
+
+#Generate ROC curves
+library(ROCR)
+XGB_perf <- prediction(XGB_pred, test$MALE)
+XGB_perf <- performance(XGB_perf, "tpr", "fpr")
+plot(XGB_perf)
+abline(a=0,b=1)
+
+#Generate calibration plot
+library(gbm)
+calibrate.plot(test$MALE, XGB_pred)
+
+#Calculate Brier Score
+library(DescTools)
+BrierScore(XGB_pred, test$MALE)
+
+#Calculate variable importance scores for top 10 predictors
+importance_matrix <- xgb.importance(names(predictors_test), model = XGB)
+xgb.plot.importance(importance_matrix, top_n = 10)
+
+#Subgroup analysis of variable importance scores for top 10 predictors based on symptom status
+
+test_CLTI <- test[test$LEO_SYMPT>=3, ]
+predictors_test_CLTI <- test_CLTI %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+importance_matrix <- xgb.importance(names(predictors_test_CLTI), model = XGB)
+xgb.plot.importance(importance_matrix, top_n = 10)
+
+test_asympt_claud <- test[test$LEO_SYMPT<=2, ]
+predictors_test_asympt_claud <- test_asympt_claud %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+importance_matrix <- xgb.importance(names(predictors_test_asympt_claud), model = XGB)
+xgb.plot.importance(importance_matrix, top_n = 10)
+
+#Subgroup analysis based on age
+test_under70 <- test[test$Age<70, ]
+test_over70 <- test[test$Age>70, ]
+predictors_test_under70 <- test_under70 %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_over70 <- test_over70 %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_under70 <- predict(XGB, as.matrix(predictors_test_under70))
+auc(test_under70$MALE, pred_under70)
+ci.auc(test_under70$MALE, pred_under70)
+
+pred_over70 <- predict(XGB, as.matrix(predictors_test_over70))
+auc(test_over70$MALE, pred_over70)
+ci.auc(test_over70$MALE, pred_over70)
+
+perf_under70 <- prediction(pred_under70, test_under70$MALE)
+perf_under70 <- performance(perf_under70, "tpr", "fpr")
+
+perf_over70 <- prediction(pred_over70, test_over70$MALE)
+perf_over70 <- performance(perf_over70, "tpr", "fpr")
+
+plot(perf_under70)
+plot(perf_over70, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+#Subgroup analysis based on sex
+test_male <- test[test$SEX==1, ]
+test_female <- test[test$SEX==2, ]
+predictors_test_male <- test_male %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_female <- test_female %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_male <- predict(XGB, as.matrix(predictors_test_male))
+auc(test_male$MALE, pred_male)
+ci.auc(test_male$MALE, pred_male)
+
+pred_female <- predict(XGB, as.matrix(predictors_test_female))
+auc(test_female$MALE, pred_female)
+ci.auc(test_female$MALE, pred_female)
+
+perf_male <- prediction(pred_male, test_male$MALE)
+perf_male <- performance(perf_male, "tpr", "fpr")
+
+perf_female <- prediction(pred_female, test_female$MALE)
+perf_female <- performance(perf_female, "tpr", "fpr")
+
+plot(perf_male)
+plot(perf_female, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+#Subgroup analysis based on race
+test_white <- test[test$RACE_NEW==1, ]
+test_nonwhite <- test[test$RACE_NEW!=1, ]
+predictors_test_white <- test_white %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_nonwhite <- test_nonwhite %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_white <- predict(XGB, as.matrix(predictors_test_white))
+auc(test_white$MALE, pred_white)
+ci.auc(test_white$MALE, pred_white)
+
+pred_nonwhite <- predict(XGB, as.matrix(predictors_test_nonwhite))
+auc(test_nonwhite$MALE, pred_nonwhite)
+ci.auc(test_nonwhite$MALE, pred_nonwhite)
+
+perf_white <- prediction(pred_white, test_white$MALE)
+perf_white <- performance(perf_white, "tpr", "fpr")
+
+perf_nonwhite <- prediction(pred_nonwhite, test_nonwhite$MALE)
+perf_nonwhite <- performance(perf_nonwhite, "tpr", "fpr")
+
+plot(perf_white)
+plot(perf_nonwhite, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+#Subgroup analysis based on ethnicity
+test_hispanic <- test[test$ETHNICITY_HISPANIC==1, ]
+test_nonhispanic <- test[test$ETHNICITY_HISPANIC==0, ]
+predictors_test_hispanic <- test_hispanic %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_nonhispanic <- test_nonhispanic %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_hispanic <- predict(XGB, as.matrix(predictors_test_hispanic))
+auc(test_hispanic$MALE, pred_hispanic)
+ci.auc(test_hispanic$MALE, pred_hispanic)
+
+pred_nonhispanic <- predict(XGB, as.matrix(predictors_test_nonhispanic))
+auc(test_nonhispanic$MALE, pred_nonhispanic)
+ci.auc(test_nonhispanic$MALE, pred_nonhispanic)
+
+perf_hispanic <- prediction(pred_hispanic, test_hispanic$MALE)
+perf_hispanic <- performance(perf_hispanic, "tpr", "fpr")
+
+perf_nonhispanic <- prediction(pred_nonhispanic, test_nonhispanic$MALE)
+perf_nonhispanic <- performance(perf_nonhispanic, "tpr", "fpr")
+
+plot(perf_hispanic)
+plot(perf_nonhispanic, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+#Subgroup analysis based on symptom status
+test_CLTI <- test[test$LEO_SYMPT>=3, ]
+test_asympt_claud <- test[test$LEO_SYMPT<=2, ]
+predictors_test_CLTI <- test_CLTI %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_asympt_claud <- test_asympt_claud %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_CLTI <- predict(XGB, as.matrix(predictors_test_CLTI))
+auc(test_CLTI$MALE, pred_CLTI)
+ci.auc(test_CLTI$MALE, pred_CLTI)
+
+pred_asympt_claud <- predict(XGB, as.matrix(predictors_test_asympt_claud))
+auc(test_asympt_claud$MALE, pred_asympt_claud)
+ci.auc(test_asympt_claud$MALE, pred_asympt_claud)
+
+perf_CLTI <- prediction(pred_CLTI, test_CLTI$MALE)
+perf_CLTI <- performance(perf_CLTI, "tpr", "fpr")
+
+perf_asympt_claud <- prediction(pred_asympt_claud, test_asympt_claud$MALE)
+perf_asympt_claud <- performance(perf_asympt_claud, "tpr", "fpr")
+
+plot(perf_CLTI)
+plot(perf_asympt_claud, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+
+#Subgroup analysis based on procedure type
+test_fempop <- test[test$LEO_PROC<=2, ]
+test_femtib <- test[test$LEO_PROC==3 & LEO_PROC==4, ]
+test_poptib <- test[test$LEO_PROC==5 & LEO_PROC==6, ]
+test_endart <- test[test$LEO_PROC==7 & LEO_PROC==8, ]
+predictors_test_fempop <- test_fempop %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_femtib <- test_femtib %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_poptib <- test_poptib %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_endart <- test_endart %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_fempop <- predict(XGB, as.matrix(predictors_test_fempop))
+auc(test_fempop$MALE, pred_fempop)
+ci.auc(test_fempop$MALE, pred_fempop)
+
+pred_femtib <- predict(XGB, as.matrix(predictors_test_femtib))
+auc(test_femtib$MALE, pred_femtib)
+ci.auc(test_femtib$MALE, pred_femtib)
+
+pred_poptib <- predict(XGB, as.matrix(predictors_test_poptib))
+auc(test_poptib$MALE, pred_poptib)
+ci.auc(test_poptib$MALE, pred_poptib)
+
+pred_endart <- predict(XGB, as.matrix(predictors_test_endart))
+auc(test_endart$MALE, pred_endart)
+ci.auc(test_endart$MALE, pred_endart)
+
+perf_fempop <- prediction(pred_fempop, test_fempop$MALE)
+perf_fempop <- performance(perf_fempop, "tpr", "fpr")
+
+perf_femtib <- prediction(pred_femtib, test_femtib$MALE)
+perf_femtib <- performance(perf_femtib, "tpr", "fpr")
+
+perf_poptib <- prediction(pred_poptib, test_poptib$MALE)
+perf_poptib <- performance(perf_poptib, "tpr", "fpr")
+
+perf_endart <- prediction(pred_endart, test_endart$MALE)
+perf_endart <- performance(perf_endart, "tpr", "fpr")
+
+plot(perf_femopop)
+plot(perf_femtib, add = TRUE, col = 'blue')
+plot(perf_poptib, add = TRUE, col = 'orange')
+plot(perf_endart, add = TRUE, col = 'green')
+abline(a=0,b=1)
+
+#Subgroup analysis based on urgency of surgery
+test_urgent <- test[test$URGENCY!=1, ]
+test_elective <- test[test$URGENCY==1, ]
+predictors_test_urgent <- test_urgent %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+predictors_test_elective <- test_elective %>% select(AdmQtr, OperYR, Age, SEX, BMI, RACE_NEW, ETHNICITY_HISPANIC, ORIGIN, HYPERMED, DIABETES, SMOKE_CURRENT, HXCHF, HXCOPD, DIALYSIS, FNSTATUS2, PHYSHIGHRISK, ASPIRIN, STATIN, BETAB, PRSODM_mmolL, PRBUN_mmolL, PRCREAT_umolL, PRALBUM_gL, PRWBC_Kmm3, PRHCT_LL, PRPLATE_Kcumm, PRINR, PRPTT_s, LEO_HEMO, ANATHIGHRISK, CONCUR_MIN_AMP, CONCUR_ENDO_ILIAC, CONCUR_ENDO_INFRA, LEO_SYMPT, LEO_PROC, URGENCY, ASACLAS)
+
+pred_urgent <- predict(XGB, as.matrix(predictors_test_urgent))
+auc(test_urgent$MALE, pred_urgent)
+ci.auc(test_urgent$MALE, pred_urgent)
+
+pred_elective <- predict(XGB, as.matrix(predictors_test_elective))
+auc(test_elective$MALE, pred_elective)
+ci.auc(test_elective$MALE, pred_elective)
+
+perf_urgent <- prediction(pred_urgent, test_urgent$MALE)
+perf_urgent <- performance(perf_urgent, "tpr", "fpr")
+
+perf_elective <- prediction(pred_elective, test_elective$MALE)
+perf_elective <- performance(perf_elective, "tpr", "fpr")
+
+plot(perf_urgent)
+plot(perf_elective, add = TRUE, col = 'blue')
+abline(a=0,b=1)
+
+#Train and evaluate XGBoost for predicting secondary outcomes
+
+XGB_loss_pat <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$loss_pat), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1) #hyperparameters chosen based on above grid search and cross validation
+XGB_loss_pat_pred <- predict(XGB_loss_pat, as.matrix(predictors_test))
+auc(test$loss_pat, XGB_loss_pat_pred)
+ci.auc(test$loss_pat, XGB_loss_pat_pred)
+XGB_loss_pat_pred_0.5 <- ifelse(XGB_loss_pat_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$loss_pat), as.factor(XGB_loss_pat_pred_0.5))
+
+XGB_reint <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$reint), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_reint_pred <- predict(XGB_reint, as.matrix(predictors_test))
+auc(test$reint, XGB_reint_pred)
+ci.auc(test$reint, XGB_reint_pred)
+XGB_reint_pred_0.5 <- ifelse(XGB_reint_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$reint), as.factor(XGB_reint_pred_0.5))
+
+XGB_maj_amp <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$maj_amp), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_maj_amp <- predict(XGB_maj_amp, as.matrix(predictors_test))
+auc(test$maj_amp, XGB_maj_amp)
+ci.auc(test$maj_amp, XGB_maj_amp)
+XGB_maj_amp_pred_0.5 <- ifelse(XGB_maj_amp_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$maj_amp), as.factor(XGB_maj_amp_pred_0.5))
+
+XGB_death <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$death), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_death_pred <- predict(XGB_death, as.matrix(predictors_test))
+auc(test$death, XGB_death_pred)
+ci.auc(test$death, XGB_death_pred)
+XGB_death_pred_0.5 <- ifelse(XGB_death_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$death), as.factor(XGB_death_pred_0.5))
+
+XGB_MI <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$MI), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_MI_pred <- predict(XGB_MI, as.matrix(predictors_test))
+auc(test$MI, XGB_MI_pred)
+ci.auc(test$MI, XGB_MI_pred)
+XGB_MI_pred_0.5 <- ifelse(XGB_MI_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MI), as.factor(XGB_MI_pred_0.5))
+
+XGB_stroke <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$stroke), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_stroke_pred <- predict(XGB_stroke, as.matrix(predictors_test))
+auc(test$stroke, XGB_stroke_pred)
+ci.auc(test$stroke, XGB_stroke_pred)
+XGB_stroke_pred_0.5 <- ifelse(XGB_stroke_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$stroke), as.factor(XGB_stroke_pred_0.5))
+
+XGB_wound_comp <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$wound_comp), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_wound_comp_pred <- predict(XGB_wound_comp, as.matrix(predictors_test))
+auc(test$wound_comp, XGB_wound_comp_pred)
+ci.auc(test$wound_comp, XGB_wound_comp_pred)
+XGB_wound_comp_pred_0.5 <- ifelse(XGB_wound_comp_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$wound_comp), as.factor(XGB_wound_comp_pred_0.5))
+
+XGB_bleed <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$bleed), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_bleed_pred <- predict(XGB_bleed, as.matrix(predictors_test))
+auc(test$bleed, XGB_bleed_pred)
+ci.auc(test$bleed, XGB_bleed_pred)
+XGB_bleed_pred_0.5 <- ifelse(XGB_bleed_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$bleed), as.factor(XGB_bleed_pred_0.5))
+
+XGB_other_outcomes <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$OTHER_OUTCOMES), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_other_outcomes_pred <- predict(XGB_other_outcomes, as.matrix(predictors_test))
+auc(test$OTHER_OUTCOMES, XGB_other_outcomes_pred)
+ci.auc(test$OTHER_OUTCOMES, XGB_other_outcomes_pred)
+XGB_other_outcomes_pred_0.5 <- ifelse(XGB_other_outcomes_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$OTHER_OUTCOMES), as.factor(XGB_other_outcomes_pred_0.5))
+
+XGB_non_home_dc <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$non_home_dc), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_non_home_dc_pred <- predict(XGB_non_home_dc, as.matrix(predictors_test))
+auc(test$non_home_dc, XGB_non_home_dc_pred)
+ci.auc(test$non_home_dc, XGB_non_home_dc_pred)
+XGB_non_home_dc_pred_0.5 <- ifelse(XGB_non_home_dc_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$non_home_dc), as.factor(XGB_non_home_dc_pred_0.5))
+
+XGB_unplanned_readmission <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$unplanned_readmission), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_unplanned_readmission_pred <- predict(XGB_unplanned_readmission, as.matrix(predictors_test))
+auc(test$unplanned_readmission, XGB_unplanned_readmission_pred)
+ci.auc(test$unplanned_readmission, XGB_unplanned_readmission_pred)
+XGB_unplanned_readmission_pred_0.5 <- ifelse(XGB_unplanned_readmission_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$unplanned_readmission), as.factor(XGB_unplanned_readmission_pred_0.5))
