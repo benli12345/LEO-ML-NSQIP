@@ -243,7 +243,6 @@ plot(perf_CLTI)
 plot(perf_asympt_claud, add = TRUE, col = 'blue')
 abline(a=0,b=1)
 
-
 #Subgroup analysis based on procedure type
 test_fempop <- test[test$LEO_PROC<=2, ]
 test_femtib <- test[test$LEO_PROC==3 & LEO_PROC==4, ]
