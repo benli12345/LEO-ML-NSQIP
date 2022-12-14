@@ -341,6 +341,13 @@ ci.auc(test$death, XGB_death_pred)
 XGB_death_pred_0.5 <- ifelse(XGB_death_pred > 0.5,1,0)
 confusionMatrix(as.factor(test$death), as.factor(XGB_death_pred_0.5))
 
+XGB_MACE <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$MACE), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
+XGB_MACE_pred <- predict(XGB_MACE, as.matrix(predictors_test))
+auc(test$MACE, XGB_MACE)
+ci.auc(test$MACE, XGB_MACE_pred)
+XGB_MACE_pred_0.5 <- ifelse(XGB_MACE_pred > 0.5,1,0)
+confusionMatrix(as.factor(test$MACE), as.factor(XGB_MACE_pred_0.5))
+
 XGB_MI <- xgboost(data = as.matrix(predictors_train), label = as.numeric(train$MI), nrounds = 100, verbose = TRUE, objective = 'binary:logistic', eval_metric = 'auc', max_depth = 6, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1)
 XGB_MI_pred <- predict(XGB_MI, as.matrix(predictors_test))
 auc(test$MI, XGB_MI_pred)
