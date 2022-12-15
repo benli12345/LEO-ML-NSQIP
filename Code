@@ -1,7 +1,7 @@
 #R version 4.2.1
 #Load NSQIP data (available with approval through ACS https://www.facs.org/quality-programs/data-and-registries/acs-nsqip/participant-use-data-file/)
 library(readr)
-data <- read_csv("data.csv")
+data <- read_csv("LEO_NSQIP_data.csv")
 
 #Split data into train (70%) and test (30%) sets
 library(caTools)
